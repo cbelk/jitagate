@@ -1,13 +1,17 @@
 #!/usr/bin/env python
 
+import boto3
+import os
+
 # Get the slack webhook from secrets manager
-def get_slack_webhook():
+def get_slack_webhook(secret_name):
     client = boto3.client('secretsmanager')
     try:
-        secret_response = client.get_secret_value(SecretId='pci_change_detection/slack_webhook')
+        secret_response = client.get_secret_value(SecretId=secret_name)
     except botocore.exceptions.ClientError as e:
         raise Exception(e)
-    slack_webhook = json.loads(secret_response['SecretString'])['slack_webhook']
+    else:
+        slack_webhook = json.loads(secret_response['SecretString'])['slack_webhook']
     return slack_webhook
 
 # Send message to Slack webhook
@@ -23,8 +27,8 @@ def send_slack_message(slack_webhook, message):
 
 def main(event={}, context={}):
     inLambda = os.environ.get('AWS_EXECUTION_ENV') is not None
-    if (inLambda):
-    else:
+    slack_secret_name = os.environ.get('SLACK_SECRET_NAME', 'jitagate/slack_webhook')
+    slack_webhook = get_slack_webhook(slack_secret_name)
 
 if __name__ == '__main__':
     main()
