@@ -1,18 +1,44 @@
 #!/usr/bin/env python
 
 import boto3
+import botocore
+import json
 import os
+import requests
 
-# Get the slack webhook from secrets manager
-def get_slack_webhook(secret_name):
+# Get the secret string from secrets manager
+def get_secret(secret_name):
     client = boto3.client('secretsmanager')
     try:
         secret_response = client.get_secret_value(SecretId=secret_name)
     except botocore.exceptions.ClientError as e:
+        ##### Better error handling here #####
         raise Exception(e)
     else:
-        slack_webhook = json.loads(secret_response['SecretString'])['slack_webhook']
-    return slack_webhook
+        return json.loads(secret_response['SecretString'])
+
+# Get the tailscale policy from the given tailnet
+def get_tailscale_policy(ts_api_token, tailnet):
+    url = 'https://api.tailscale.com/api/v2/tailnet/{}/acl'.format(tailnet)
+    headers={"Authorization": 'Bearer {}'.format(ts_api_token), 'Accept': 'application/json'}
+    res = requests.get(url, headers=headers)
+    attempts = 1
+    while res.status_code >= 500 and attempts < 3:
+        res = requests.get(url, headers=headers)
+        attempts += 1
+    if res.status_code != 200:
+        print('[jitagate] Response code: {} Response text: {}'.format(res.status_code, res.text))
+    return res.json()
+
+# Get an API key from tailscale using the oauth client
+def get_tailscale_api_token(oauth_client):
+    url = 'https://api.tailscale.com/api/v2/oauth/token'
+    data = {
+            'client_id': oauth_client['client_id'],
+            'client_secret': oauth_client['client_secret'],
+            }
+    res = requests.post(url, data=data)
+    return res.json()
 
 # Send message to Slack webhook
 def send_slack_message(slack_webhook, message):
@@ -26,9 +52,15 @@ def send_slack_message(slack_webhook, message):
     return
 
 def main(event={}, context={}):
-    inLambda = os.environ.get('AWS_EXECUTION_ENV') is not None
     slack_secret_name = os.environ.get('SLACK_SECRET_NAME', 'jitagate/slack_webhook')
-    slack_webhook = get_slack_webhook(slack_secret_name)
+    secret_string = get_secret(slack_secret_name)
+    slack_webhook = secret_string['webhook']
+    ts_secret_name = os.environ.get('TAILSCALE_SECRET_NAME', 'jitagate/tailscale_oauth')
+    secret_string = get_secret(ts_secret_name)
+    ts_api_token = get_tailscale_api_token(secret_string)['access_token']
+    tailnet = os.environ.get('TAILNET_NAME', '-')
+    policy = get_tailscale_policy(ts_api_token, tailnet)
+    print(policy)
 
 if __name__ == '__main__':
     main()
