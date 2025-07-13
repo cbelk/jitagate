@@ -6,6 +6,17 @@ import json
 import os
 import requests
 
+def get_approvers(ddb_approvers_table, ts_group):
+    client = boto3.client('dynamodb')
+    try:
+        res = client.get_item(Key = {'ts_group': {'S': ts_group}}, TableName = ddb_approvers_table)
+    except botocore.exceptions.ClientError as e:
+        ##### Better error handling here #####
+        raise Exception(e)
+    else:
+        #return json.loads(res['Item'])
+        return res['Item']['approvers']
+
 # Get the secret string from secrets manager
 def get_secret(secret_name):
     client = boto3.client('secretsmanager')
@@ -55,17 +66,22 @@ def tailscale_api_get(ts_api_token, tailnet, endpoint):
     return res.json()
 
 def main(event={}, context={}):
+    # Variables with defaults that can be overridden with environment variables
     slack_secret_name = os.environ.get('SLACK_SECRET_NAME', 'jitagate/slack_webhook')
+    ts_secret_name = os.environ.get('TAILSCALE_SECRET_NAME', 'jitagate/tailscale_oauth')
+    tailnet = os.environ.get('TAILNET_NAME', '-')
+    ddb_approvers_table = os.environ.get('DYNAMODB_TABLE_NAME', 'jitagate_approvers')
+
     secret_string = get_secret(slack_secret_name)
     slack_webhook = secret_string['webhook']
-    ts_secret_name = os.environ.get('TAILSCALE_SECRET_NAME', 'jitagate/tailscale_oauth')
     secret_string = get_secret(ts_secret_name)
     ts_api_token = get_tailscale_api_token(secret_string)['access_token']
-    tailnet = os.environ.get('TAILNET_NAME', '-')
     policy = tailscale_api_get(ts_api_token, tailnet, 'acl')
     ts_users = tailscale_api_get(ts_api_token, tailnet, 'users')
+    approvers = get_approvers(ddb_approvers_table, 'testers')
     print(policy)
     print(ts_users)
+    print(approvers)
 
 if __name__ == '__main__':
     main()
