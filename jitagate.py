@@ -12,7 +12,7 @@ import requests
 def get_approvers(ddb_approvers_table, ts_group):
     client = boto3.client('dynamodb')
     try:
-        res = client.get_item(Key = {'ts_group': {'S': ts_group}}, TableName = ddb_approvers_table)
+        res = client.get_item(Key={'ts_group': {'S': ts_group}}, TableName=ddb_approvers_table)
     except botocore.exceptions.ClientError as e:
         ##### Better error handling here #####
         raise Exception(e)
@@ -25,7 +25,7 @@ def get_approvers(ddb_approvers_table, ts_group):
 def get_groups(ddb_approvers_table):
     client = boto3.client('dynamodb')
     try:
-        res = client.scan(TableName = ddb_approvers_table, ProjectionExpression = 'ts_group')
+        res = client.scan(TableName=ddb_approvers_table, ProjectionExpression='ts_group')
     except botocore.exceptions.ClientError as e:
         ##### Better error handling here #####
         raise Exception(e)
@@ -147,6 +147,7 @@ def get_request_modal(trigger_id, groups):
     return {'trigger_id': trigger_id, 'view': view}
 
 # Get the secret string from secrets manager
+#   secret_name:  the name of the secret to retrieve from secretsmanager
 def get_secret(secret_name):
     client = boto3.client('secretsmanager')
     try:
