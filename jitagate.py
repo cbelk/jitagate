@@ -169,6 +169,15 @@ def get_tailscale_api_token(oauth_client):
     res = requests.post(url, data=data)
     return res.json()
 
+# Get information about the slack user with the given user_id
+#   token:      the slack oauth token
+#   user_id:    the user ID to get info about
+def get_slack_user_info(token, user_id):
+    url = 'https://slack.com/api/users.info'
+    headers = {'Authorization': 'Bearer {}'.format(token)}
+    res = requests.get('{}/?user={}'.format(url, user_id), headers=headers)
+    return res.json()
+
 # Send message to Slack webhook
 #   slack_webhook:  the slack webhook to send the message to
 #   message:        the message to send
@@ -201,21 +210,27 @@ def tailscale_api_get(ts_api_token, tailnet, endpoint):
 def main(event={}, context={}):
     # Variables with defaults that can be overridden with environment variables
     slack_secret_name = os.environ.get('SLACK_SECRET_NAME', 'jitagate/slack_webhook')
+    slack_oauth_secret_name = os.environ.get('SLACK_OAUTH_SECRET_NAME', 'jitagate/slack_oauth')
     ts_secret_name = os.environ.get('TAILSCALE_SECRET_NAME', 'jitagate/tailscale_oauth')
     tailnet = os.environ.get('TAILNET_NAME', '-')
     ddb_approvers_table = os.environ.get('DYNAMODB_TABLE_NAME', 'jitagate_approvers')
 
     secret_string = get_secret(slack_secret_name)
     slack_webhook = secret_string['webhook']
+    secret_string = get_secret(slack_oauth_secret_name)
+    slack_oauth = secret_string['token']
     secret_string = get_secret(ts_secret_name)
     ts_api_token = get_tailscale_api_token(secret_string)['access_token']
 #    policy = tailscale_api_get(ts_api_token, tailnet, 'acl')
 #    ts_users = tailscale_api_get(ts_api_token, tailnet, 'users')
 #    approvers = get_approvers(ddb_approvers_table, 'testers')
-    groups = get_groups(ddb_approvers_table)
-    modal = get_request_modal('my_trigger_id', groups)
-    print(groups)
-    print(json.dumps(modal))
+#    groups = get_groups(ddb_approvers_table)
+#    modal = get_request_modal('my_trigger_id', groups)
+#    print(groups)
+#    print(json.dumps(modal))
+    user_id = '<user-id>'
+    user_info = get_slack_user_email(slack_oauth, user_id)
+    print(user_info)
 
 if __name__ == '__main__':
     main()
