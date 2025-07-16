@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 
+import base64
 import boto3
 import botocore
 import json
 import os
 import requests
+from urllib.parse import parse_qs
 
 # Get the approvers for the given tailscale group
 #   ddb_approvers_table:    the name of the approvers table
@@ -35,10 +37,36 @@ def get_groups(ddb_approvers_table):
             groups.append(item['ts_group']['S'])
         return groups
 
-# Generate the modal to present the user in slack
+# Generate the loading modal to present the user in slack
+#   trigger_id: the trigger_id generated when the user issued the slash command (3 second lifespan)
+def get_loading_modal(trigger_id):
+    view = {'type': 'modal',
+            'close': {
+                'type': 'plain_text',
+                'text': 'Cancel',
+                'emoji': True
+            },
+            'title': {
+                'type': 'plain_text',
+                'text': 'Jitagate',
+                'emoji': True
+            },
+            'blocks': [
+                {
+                    'type': 'section',
+                    'text': {
+                        'type': 'mrkdwn',
+                        'text': '*Loading access request information...*'
+                    }
+                }
+            ]
+    }
+    return {'trigger_id': trigger_id, 'view': view}
+
+# Generate the modal to replace the loading modal in slack
 #   trigger_id: the trigger_id generated when the user issued the slash command (3 second lifespan)
 #   groups:     the list of tailscale groups to present to the user
-def get_request_modal(trigger_id, groups):
+def get_request_modal(view_id, groups):
     view = {'type': 'modal',
             'submit': {
                 'type': 'plain_text',
@@ -76,7 +104,7 @@ def get_request_modal(trigger_id, groups):
                         'type': 'static_select',
                         'placeholder': {
                             'type': 'plain_text',
-                            'text': 'Group list',
+                            'text': 'group',
                             'emoji': True
                         },
                         'options': []
@@ -99,7 +127,7 @@ def get_request_modal(trigger_id, groups):
                             {
                                 'text': {
                                     'type': 'plain_text',
-                                    'text': '*30 min*',
+                                    'text': '30 min',
                                     'emoji': True
                                 },
                                 'value': '1800'
@@ -107,7 +135,7 @@ def get_request_modal(trigger_id, groups):
                             {
                                 'text': {
                                     'type': 'plain_text',
-                                    'text': '*1 hour*',
+                                    'text': '1 hour',
                                     'emoji': True
                                 },
                                 'value': '3600'
@@ -115,7 +143,7 @@ def get_request_modal(trigger_id, groups):
                             {
                                 'text': {
                                     'type': 'plain_text',
-                                    'text': '*6 hours*',
+                                    'text': '6 hours',
                                     'emoji': True
                                 },
                                 'value': '21600'
@@ -123,7 +151,7 @@ def get_request_modal(trigger_id, groups):
                             {
                                 'text': {
                                     'type': 'plain_text',
-                                    'text': '*12 hours*',
+                                    'text': '12 hours',
                                     'emoji': True
                                 },
                                 'value': '43200'
@@ -138,13 +166,13 @@ def get_request_modal(trigger_id, groups):
         option = {
                     'text': {
                         'type': 'plain_text',
-                        'text': '*{}*'.format(group),
+                        'text': '{}'.format(group),
                         'emoji': True
                     },
                     'value': group
                  }
         view['blocks'][2]['accessory']['options'].append(option)
-    return {'trigger_id': trigger_id, 'view': view}
+    return {'view_id': view_id, 'view': view}
 
 # Get the secret string from secrets manager
 #   secret_name:  the name of the secret to retrieve from secretsmanager
@@ -191,6 +219,14 @@ def send_slack_message(slack_webhook, message):
         print('[jitagate] Response code: {} Response text: {}'.format(res.status_code, res.text))
     return
 
+# Send response modal to Slack
+#   token:  the slack oauth token
+#   modal:  the modal to send
+def send_slack_modal(url, token, modal):
+    headers = {'Content-type': 'application/json', 'Authorization': 'Bearer {}'.format(token)}
+    res = requests.post(url, data=json.dumps(modal), headers=headers)
+    return res
+
 # Get a json object from the tailscale API
 #   ts_api_token:   the tailscale API token to use
 #   tailnet:        the tailnet name to use
@@ -215,21 +251,32 @@ def main(event={}, context={}):
     tailnet = os.environ.get('TAILNET_NAME', '-')
     ddb_approvers_table = os.environ.get('DYNAMODB_TABLE_NAME', 'jitagate_approvers')
 
+    if event['rawPath'] == '/modal':
+        secret_string = get_secret(slack_oauth_secret_name)
+        slack_oauth = secret_string['token']
+        body = parse_qs(base64.b64decode(event['body']).decode('utf-8'))
+        modal = get_loading_modal(body['trigger_id'][0])
+        url = 'https://slack.com/api/views.open'
+        res = send_slack_modal(url, slack_oauth, modal)
+        print(res.text)
+        view_id = res.json()['view']['id']
+        groups = get_groups(ddb_approvers_table)
+        modal = get_request_modal(view_id, groups)
+        url = 'https://slack.com/api/views.update'
+        res = send_slack_modal(url, slack_oauth, modal)
+        print(res.text)
+        exit()
+
     secret_string = get_secret(slack_secret_name)
     slack_webhook = secret_string['webhook']
-    secret_string = get_secret(slack_oauth_secret_name)
-    slack_oauth = secret_string['token']
     secret_string = get_secret(ts_secret_name)
     ts_api_token = get_tailscale_api_token(secret_string)['access_token']
+
 #    policy = tailscale_api_get(ts_api_token, tailnet, 'acl')
 #    ts_users = tailscale_api_get(ts_api_token, tailnet, 'users')
 #    approvers = get_approvers(ddb_approvers_table, 'testers')
-#    groups = get_groups(ddb_approvers_table)
-#    modal = get_request_modal('my_trigger_id', groups)
-#    print(groups)
-#    print(json.dumps(modal))
     user_id = '<user-id>'
-    user_info = get_slack_user_email(slack_oauth, user_id)
+    user_info = get_slack_user_info(slack_oauth, user_id)
     print(user_info)
 
 if __name__ == '__main__':
