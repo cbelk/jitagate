@@ -206,6 +206,19 @@ def get_slack_user_info(token, user_id):
     res = requests.get('{}/?user={}'.format(url, user_id), headers=headers)
     return res.json()
 
+# Push the modal view ID to the queue
+#   queue:  the SQS queue url
+#   view:   the view ID to send to the queue
+def push_view_id(queue, view):
+    client = boto3.client('sqs')
+    try:
+        res = client.send_message(QueueUrl=queue, MessageBody=view)
+    except botocore.exceptions.ClientError as e:
+        ##### Better error handling here #####
+        raise Exception(e)
+    else:
+        return
+
 # Send message to Slack webhook
 #   slack_webhook:  the slack webhook to send the message to
 #   message:        the message to send
@@ -251,21 +264,48 @@ def main(event={}, context={}):
     tailnet = os.environ.get('TAILNET_NAME', '-')
     ddb_approvers_table = os.environ.get('DYNAMODB_TABLE_NAME', 'jitagate_approvers')
 
+    # This variable has no default so it has to be set in the environment
+    if 'JITAGATE_SQS_URL' not in os.environ:
+        exit('[jitagate] JITAGATE_SQS_URL environment variable required')
+    sqs_url = os.environ.get('JITAGATE_SQS_URL')
+
+    secret_string = get_secret(slack_oauth_secret_name)
+    slack_oauth = secret_string['token']
+
+    if 'Records' in event and event['Records'][0]['eventSource'] == 'aws:sqs':
+        view_id = event['Records'][0]['body']
+        groups = get_groups(ddb_approvers_table)
+        modal = get_request_modal(view_id, groups)
+        url = 'https://slack.com/api/views.update'
+        res = send_slack_modal(url, slack_oauth, modal)
+        print(res.text)
+        return
+
     if event['rawPath'] == '/modal':
-        secret_string = get_secret(slack_oauth_secret_name)
-        slack_oauth = secret_string['token']
         body = parse_qs(base64.b64decode(event['body']).decode('utf-8'))
         modal = get_loading_modal(body['trigger_id'][0])
         url = 'https://slack.com/api/views.open'
         res = send_slack_modal(url, slack_oauth, modal)
         print(res.text)
         view_id = res.json()['view']['id']
-        groups = get_groups(ddb_approvers_table)
-        modal = get_request_modal(view_id, groups)
-        url = 'https://slack.com/api/views.update'
-        res = send_slack_modal(url, slack_oauth, modal)
-        print(res.text)
-        exit()
+        push_view_id(sqs_url, view_id)
+        return 'jitagate access request'
+
+    if event['rawPath'] == '/request':
+        body = parse_qs(base64.b64decode(event['body']).decode('utf-8'))
+        payload = json.loads(body['payload'][0])
+        if payload['type'] == 'block_actions':
+            return
+        elif payload['type'] == 'view_submission':
+            group_block_id = payload['view']['blocks'][2]['block_id']
+            group_action_id = payload['view']['blocks'][2]['accessory']['action_id']
+            duration_block_id = payload['view']['blocks'][3]['block_id']
+            group = payload['view']['state']['values'][group_block_id][group_action_id]['selected_option']['value']
+            duration = payload['view']['state']['values'][duration_block_id]['static_select-action']['selected_option']['value']
+            user_info = get_slack_user_info(slack_oauth, payload['user']['id'])
+            print(user_info)
+            print('group: {}\nduration: {}'.format(group, duration))
+            return
 
     secret_string = get_secret(slack_secret_name)
     slack_webhook = secret_string['webhook']
@@ -275,9 +315,6 @@ def main(event={}, context={}):
 #    policy = tailscale_api_get(ts_api_token, tailnet, 'acl')
 #    ts_users = tailscale_api_get(ts_api_token, tailnet, 'users')
 #    approvers = get_approvers(ddb_approvers_table, 'testers')
-    user_id = '<user-id>'
-    user_info = get_slack_user_info(slack_oauth, user_id)
-    print(user_info)
 
 if __name__ == '__main__':
     main()
